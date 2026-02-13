@@ -3,6 +3,10 @@ name = "agents-po"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "po"
+path = "src/main.rs"
+
 [dependencies]
 agile_common = { path = "../../crates/common" }
 agile_config = { path = "../../crates/config" }
@@ -10,3 +14,6 @@ agile_store_redis = { path = "../../crates/store_redis" }
 agile_bus_mqtt = { path = "../../crates/bus_mqtt" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+uuid = { version = "1.0", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }

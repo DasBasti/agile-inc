@@ -10,8 +10,3 @@ members = [
   "agents/qa",
   "tools/publish_event"
 ]
-
-[package]
-name = "agile-inc-root"
-version = "0.0.0"
-edition = "2021"
