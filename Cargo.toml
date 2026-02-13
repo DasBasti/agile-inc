@@ -9,5 +9,6 @@ members = [
   "agents/po",
   "agents/dev",
   "agents/qa",
-  "tools/publish_event"
+  "tools/publish_event",
+  "tools/audit-tool"
 ]
