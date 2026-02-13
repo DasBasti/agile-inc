@@ -1,0 +1,18 @@
+version: '3.8'
+services:
+  redis:
+    image: redis:7
+    command: ["redis-server","/usr/local/etc/redis/redis.conf"]
+    volumes:
+      - ./redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+      - redis-data:/data
+    ports:
+      - "49155:6379"
+  mqtt:
+    image: eclipse-mosquitto:2.0
+    volumes:
+      - ./mqtt/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    ports:
+      - "1883:1883"
+volumes:
+  redis-data:

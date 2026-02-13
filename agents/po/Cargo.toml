@@ -1,0 +1,12 @@
+[package]
+name = "agents-po"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+agile_common = { path = "../../crates/common" }
+agile_config = { path = "../../crates/config" }
+agile_store_redis = { path = "../../crates/store_redis" }
+agile_bus_mqtt = { path = "../../crates/bus_mqtt" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

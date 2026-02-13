@@ -1,0 +1,17 @@
+[workspace]
+members = [
+  "crates/common",
+  "crates/config",
+  "crates/bus_mqtt",
+  "crates/store_redis",
+  "crates/opencode_runner",
+  "agents/po",
+  "agents/dev",
+  "agents/qa",
+  "tools/publish_event"
+]
+
+[package]
+name = "agile-inc-root"
+version = "0.0.0"
+edition = "2021"

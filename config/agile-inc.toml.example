@@ -1,0 +1,21 @@
+[mqtt]
+host = "192.168.0.11"
+port = 1883
+username = "agil"
+password = "agil"
+base_topic = "agileinc"
+client_id_prefix = "agileinc"
+
+[redis]
+url = "redis://192.168.0.137:49155"
+dedupe_ttl_seconds = 86400
+
+[opencode]
+command = "opencode"
+default_args = ["--non-interactive"]
+workdir = "./"
+timeout_seconds = 1800
+max_output_kb = 2048
+
+[agents]
+log_level = "info"
