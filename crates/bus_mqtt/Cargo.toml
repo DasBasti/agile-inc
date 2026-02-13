@@ -7,6 +7,8 @@ edition = "2021"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "1.0"
+rumqttc = "0.16"
+tokio = { version = "1.0", features = ["rt", "rt-multi-thread", "time", "sync", "macros"] }
 agile_common = { path = "../common" }
 
 [dev-dependencies]

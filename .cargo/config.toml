@@ -1,0 +1,5 @@
+[build]
+rustflags = ["-A", "dependency_on_unit_never_type_fallback"]
+
+[term]
+verbose = false
