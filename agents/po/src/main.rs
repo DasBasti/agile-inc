@@ -1,6 +1,7 @@
 use agile_bus_mqtt::{EventBus, EventEnvelope};
 use agile_common::types::{AuditEntry, Doc, DocType, Role};
-use agile_config::{Config, TopicBuilder};
+use agile_config::Config;
+use agile_llm::LlmClient;
 use agile_store_redis::RedisStore;
 use serde_json::json;
 use uuid::Uuid;
@@ -12,11 +13,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = Config::load("config/agile-inc.toml")?;
     println!(
-        "Config loaded: MQTT={}:{}, Redis={}",
-        config.mqtt.host, config.mqtt.port, config.redis.url
+        "Config loaded: MQTT={}:{}, Redis={}, LLM={}",
+        config.mqtt.host, config.mqtt.port, config.redis.url, config.llm.model
     );
 
-    let mut store = RedisStore::new(&config.redis.url)?;
+    let store = RedisStore::new(&config.redis.url)?;
     store.ping()?;
     println!("Redis connected");
 
@@ -30,6 +31,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     println!("MQTT bus connected");
 
+    let llm = LlmClient::new(
+        &config.llm.model,
+        config.llm.temperature,
+        config.llm.max_tokens,
+        &config.llm.base_url,
+    )?;
+    println!("LLM client connected: {}", config.llm.model);
+
     bus.subscribe_to_role("po")?;
     println!("Subscribed to PO inbox");
 
@@ -42,16 +51,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "\nReceived event: {} (trace: {})",
                 event.r#type, event.trace_id
             );
-            handle_event(&bus, &mut store, &event);
+            handle_event(&config, &bus, &store, &llm, &event);
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
 }
 
-fn handle_event(bus: &EventBus, store: &mut RedisStore, event: &EventEnvelope) {
+fn handle_event(config: &Config, bus: &EventBus, store: &RedisStore, llm: &LlmClient, event: &EventEnvelope) {
     match event.r#type.as_str() {
         "story.new" | "story.create" => {
-            handle_story_creation(bus, store, event);
+            handle_story_creation(config, bus, store, llm, event);
         }
         "policy.changed" => {
             println!("Policy changed, acknowledging...");
@@ -62,7 +71,7 @@ fn handle_event(bus: &EventBus, store: &mut RedisStore, event: &EventEnvelope) {
     }
 }
 
-fn handle_story_creation(bus: &EventBus, store: &mut RedisStore, event: &EventEnvelope) {
+fn handle_story_creation(config: &Config, bus: &EventBus, store: &RedisStore, llm: &LlmClient, event: &EventEnvelope) {
     let story_id = Uuid::new_v4().to_string();
     let trace_id = event.trace_id.clone();
     let event_id = event.event_id.clone();
@@ -96,10 +105,7 @@ fn handle_story_creation(bus: &EventBus, store: &mut RedisStore, event: &EventEn
                 .collect()
         })
         .unwrap_or_else(|| {
-            vec![
-                "cargo test".to_string(),
-                "cargo fmt --check".to_string(),
-            ]
+            vec!["cargo test".to_string(), "cargo fmt --check".to_string()]
         });
 
     let mut doc = Doc::new(&story_id, DocType::Story, &title, &body, "ready", Role::Po);
@@ -117,6 +123,34 @@ fn handle_story_creation(bus: &EventBus, store: &mut RedisStore, event: &EventEn
         Ok(saved_doc) => {
             println!("Created story: {} - {}", saved_doc.id, saved_doc.title);
 
+            let prompt = prompts::generate_po_prompt(&saved_doc);
+            println!("\nGenerating LLM response...");
+
+            let llm_response = match llm.generate(&prompt) {
+                Ok(response) => {
+                    println!("LLM response received ({} chars)", response.len());
+                    response
+                }
+                Err(e) => {
+                    println!("LLM call failed: {}", e);
+                    println!("Rolling back - deleting story doc");
+                    
+                    let _ = store.doc_put(&Doc::new(&story_id, DocType::Story, &title, &body, "failed", Role::Po), None);
+                    
+                    let retry_event = EventEnvelope::new(
+                        &Uuid::new_v4().to_string(),
+                        &trace_id,
+                        "story.failed",
+                        "po",
+                        "system",
+                        json!({ "storyId": story_id }),
+                        json!({ "summary": format!("Story creation failed: {}", e) }),
+                    );
+                    bus.publish_to_role("system", retry_event).ok();
+                    return;
+                }
+            };
+
             let audit = AuditEntry::new(
                 &trace_id,
                 &event_id,
@@ -126,22 +160,20 @@ fn handle_story_creation(bus: &EventBus, store: &mut RedisStore, event: &EventEn
             );
             store.stream_append("events", &audit).ok();
 
-            let prompt = prompts::generate_po_prompt(&saved_doc);
-            println!("\n{}", prompt);
-
             let runlog_id = Uuid::new_v4().to_string();
             let mut runlog = Doc::new(
                 &runlog_id,
                 DocType::Runlog,
                 &format!("PO Agent - Story {}", saved_doc.id),
-                &prompt,
+                &format!("PROMPT:\n{}\n\nLLM RESPONSE:\n{}", prompt, llm_response),
                 "completed",
                 Role::Po,
             );
             runlog.trace_id = Some(trace_id.clone());
             runlog.fields = json!({
                 "event_id": event_id,
-                "action": "story.created"
+                "action": "story.created",
+                "llm_response": llm_response
             });
             store.doc_put(&runlog, None).ok();
 

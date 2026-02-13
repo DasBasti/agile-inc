@@ -75,12 +75,42 @@ fn default_log_level() -> String {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct LlmConfig {
+    #[serde(default = "default_llm_model")]
+    pub model: String,
+    #[serde(default = "default_llm_temperature")]
+    pub temperature: f32,
+    #[serde(default = "default_llm_max_tokens")]
+    pub max_tokens: usize,
+    #[serde(default = "default_llm_base_url")]
+    pub base_url: String,
+}
+
+fn default_llm_model() -> String {
+    "minimax-m2.5:cloud".to_string()
+}
+
+fn default_llm_temperature() -> f32 {
+    0.7
+}
+
+fn default_llm_max_tokens() -> usize {
+    2048
+}
+
+fn default_llm_base_url() -> String {
+    "http://localhost:11434".to_string()
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Config {
     pub mqtt: MqttConfig,
     pub redis: RedisConfig,
     pub opencode: OpencodeConfig,
     #[serde(default)]
     pub agents: AgentsConfig,
+    #[serde(default)]
+    pub llm: LlmConfig,
 }
 
 impl Config {

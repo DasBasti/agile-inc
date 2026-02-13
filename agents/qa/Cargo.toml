@@ -13,6 +13,7 @@ agile_config = { path = "../../crates/config" }
 agile_store_redis = { path = "../../crates/store_redis" }
 agile_bus_mqtt = { path = "../../crates/bus_mqtt" }
 agile_opencode_runner = { path = "../../crates/opencode_runner" }
+agile_llm = { path = "../../crates/llm" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.0", features = ["full"] }

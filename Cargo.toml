@@ -5,6 +5,7 @@ members = [
   "crates/bus_mqtt",
   "crates/store_redis",
   "crates/opencode_runner",
+  "crates/llm",
   "agents/po",
   "agents/dev",
   "agents/qa",

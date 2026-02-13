@@ -4,6 +4,7 @@ use agile_common::types::{
     ExecJob, OutputLimits, Role,
 };
 use agile_config::Config;
+use agile_llm::LlmClient;
 use agile_opencode_runner::{diffstat, run as run_exec, RunnerError};
 use agile_store_redis::RedisStore;
 use serde_json::json;
@@ -17,11 +18,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = Config::load("config/agile-inc.toml")?;
     println!(
-        "Config loaded: MQTT={}:{}, Redis={}",
-        config.mqtt.host, config.mqtt.port, config.redis.url
+        "Config loaded: MQTT={}:{}, Redis={}, LLM={}",
+        config.mqtt.host, config.mqtt.port, config.redis.url, config.llm.model
     );
 
-    let mut store = RedisStore::new(&config.redis.url)?;
+    let store = RedisStore::new(&config.redis.url)?;
     store.ping()?;
     println!("Redis connected");
 
@@ -34,6 +35,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &config.mqtt.base_topic,
     )?;
     println!("MQTT bus connected");
+
+    let llm = LlmClient::new(
+        &config.llm.model,
+        config.llm.temperature,
+        config.llm.max_tokens,
+        &config.llm.base_url,
+    )?;
+    println!("LLM client connected: {}", config.llm.model);
 
     bus.subscribe_to_role("dev")?;
     println!("Subscribed to Dev inbox");
@@ -51,7 +60,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "\nReceived event: {} (trace: {}, event: {})",
                 event.r#type, event.trace_id, event.event_id
             );
-            rt.block_on(handle_event(&config, &bus, &mut store, &event));
+            rt.block_on(handle_event(&config, &bus, &store, &llm, &event));
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
@@ -60,15 +69,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 async fn handle_event(
     config: &Config,
     bus: &EventBus,
-    store: &mut RedisStore,
+    store: &RedisStore,
+    llm: &LlmClient,
     event: &EventEnvelope,
 ) {
     match event.r#type.as_str() {
         "story.ready" => {
-            handle_story_ready(config, bus, store, event).await;
+            handle_story_ready(config, bus, store, llm, event).await;
         }
         "bug.new" => {
-            handle_bug_new(config, bus, store, event).await;
+            handle_bug_new(config, bus, store, llm, event).await;
         }
         _ => {
             println!("Unhandled event type: {}", event.r#type);
@@ -79,7 +89,8 @@ async fn handle_event(
 async fn handle_story_ready(
     config: &Config,
     bus: &EventBus,
-    store: &mut RedisStore,
+    store: &RedisStore,
+    llm: &LlmClient,
     event: &EventEnvelope,
 ) {
     let trace_id = event.trace_id.clone();
@@ -134,14 +145,37 @@ async fn handle_story_ready(
         .unwrap_or_else(|| vec!["cargo test".to_string()]);
 
     let prompt = prompts::generate_dev_prompt(&story, &dod_gates);
-    println!("\n{}", prompt);
+    println!("\nGenerating LLM response...");
+
+    let llm_response = match llm.generate(&prompt) {
+        Ok(response) => {
+            println!("LLM response received ({} chars)", response.len());
+            response
+        }
+        Err(e) => {
+            println!("LLM call failed: {}", e);
+            println!("Rolling back - emitting story.retry");
+            
+            let retry_event = EventEnvelope::new(
+                &Uuid::new_v4().to_string(),
+                &trace_id,
+                "story.retry",
+                "dev",
+                "dev",
+                json!({ "storyId": story.id }),
+                json!({ "summary": format!("Story {} needs retry: {}", story.id, e) }),
+            );
+            bus.publish_to_role("dev", retry_event).ok();
+            return;
+        }
+    };
 
     let runlog_id = Uuid::new_v4().to_string();
     let mut runlog = Doc::new(
         &runlog_id,
         DocType::Runlog,
         &format!("Dev Agent - Story {}", story.id),
-        &prompt,
+        &format!("PROMPT:\n{}\n\nLLM RESPONSE:\n{}", prompt, llm_response),
         "in_progress",
         Role::Dev,
     );
@@ -149,7 +183,8 @@ async fn handle_story_ready(
     runlog.fields = json!({
         "event_id": event_id,
         "action": "story.processing",
-        "story_id": story.id
+        "story_id": story.id,
+        "llm_response": llm_response
     });
     store.doc_put(&runlog, None).ok();
 
@@ -178,7 +213,7 @@ async fn handle_story_ready(
     println!("Opencode result: {}", output_summary);
 
     let mut runlog_output = runlog;
-    runlog_output.body = format!("{}\n\nOutput: {}", prompt, output_summary);
+    runlog_output.body = format!("{}\n\nOutput: {}", runlog_output.body, output_summary);
     runlog_output.status = match &result {
         Ok(r) if r.exit_code == 0 => "completed".to_string(),
         Ok(_) => "failed".to_string(),
@@ -252,7 +287,8 @@ async fn handle_story_ready(
 async fn handle_bug_new(
     config: &Config,
     bus: &EventBus,
-    store: &mut RedisStore,
+    store: &RedisStore,
+    llm: &LlmClient,
     event: &EventEnvelope,
 ) {
     let trace_id = event.trace_id.clone();
@@ -276,14 +312,37 @@ async fn handle_bug_new(
     println!("Processing bug: {} - {}", bug.id, bug.title);
 
     let prompt = prompts::generate_fix_prompt(&bug);
-    println!("\n{}", prompt);
+    println!("\nGenerating LLM response...");
+
+    let llm_response = match llm.generate(&prompt) {
+        Ok(response) => {
+            println!("LLM response received ({} chars)", response.len());
+            response
+        }
+        Err(e) => {
+            println!("LLM call failed: {}", e);
+            println!("Rolling back - emitting bug.retry");
+            
+            let retry_event = EventEnvelope::new(
+                &Uuid::new_v4().to_string(),
+                &trace_id,
+                "bug.retry",
+                "dev",
+                "dev",
+                json!({ "bugId": bug.id }),
+                json!({ "summary": format!("Bug {} needs retry: {}", bug.id, e) }),
+            );
+            bus.publish_to_role("dev", retry_event).ok();
+            return;
+        }
+    };
 
     let runlog_id = Uuid::new_v4().to_string();
     let mut runlog = Doc::new(
         &runlog_id,
         DocType::Runlog,
         &format!("Dev Agent - Bug Fix {}", bug.id),
-        &prompt,
+        &format!("PROMPT:\n{}\n\nLLM RESPONSE:\n{}", prompt, llm_response),
         "in_progress",
         Role::Dev,
     );
@@ -291,7 +350,8 @@ async fn handle_bug_new(
     runlog.fields = json!({
         "event_id": event_id,
         "action": "bug.fix",
-        "bug_id": bug.id
+        "bug_id": bug.id,
+        "llm_response": llm_response
     });
     store.doc_put(&runlog, None).ok();
 

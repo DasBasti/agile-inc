@@ -3,6 +3,7 @@ use agile_common::types::{
     AuditEntry, DedupRequest, DedupResult, DedupScope, Doc, DocType, ExecJob, OutputLimits, Role,
 };
 use agile_config::Config;
+use agile_llm::LlmClient;
 use agile_opencode_runner::run as run_exec;
 use agile_store_redis::RedisStore;
 use serde_json::json;
@@ -16,11 +17,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = Config::load("config/agile-inc.toml")?;
     println!(
-        "Config loaded: MQTT={}:{}, Redis={}",
-        config.mqtt.host, config.mqtt.port, config.redis.url
+        "Config loaded: MQTT={}:{}, Redis={}, LLM={}",
+        config.mqtt.host, config.mqtt.port, config.redis.url, config.llm.model
     );
 
-    let mut store = RedisStore::new(&config.redis.url)?;
+    let store = RedisStore::new(&config.redis.url)?;
     store.ping()?;
     println!("Redis connected");
 
@@ -33,6 +34,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &config.mqtt.base_topic,
     )?;
     println!("MQTT bus connected");
+
+    let llm = LlmClient::new(
+        &config.llm.model,
+        config.llm.temperature,
+        config.llm.max_tokens,
+        &config.llm.base_url,
+    )?;
+    println!("LLM client connected: {}", config.llm.model);
 
     bus.subscribe_to_role("qa")?;
     println!("Subscribed to QA inbox");
@@ -50,7 +59,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "\nReceived event: {} (trace: {}, event: {})",
                 event.r#type, event.trace_id, event.event_id
             );
-            rt.block_on(handle_event(&config, &bus, &mut store, &event));
+            rt.block_on(handle_event(&config, &bus, &store, &llm, &event));
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
@@ -59,15 +68,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 async fn handle_event(
     config: &Config,
     bus: &EventBus,
-    store: &mut RedisStore,
+    store: &RedisStore,
+    llm: &LlmClient,
     event: &EventEnvelope,
 ) {
     match event.r#type.as_str() {
         "build.done" => {
-            handle_build_done(config, bus, store, event).await;
+            handle_build_done(config, bus, store, llm, event).await;
         }
         "bug.new" => {
-            handle_bug_new(config, bus, store, event).await;
+            handle_bug_new(config, bus, store, llm, event).await;
         }
         _ => {
             println!("Unhandled event type: {}", event.r#type);
@@ -78,7 +88,8 @@ async fn handle_event(
 async fn handle_build_done(
     config: &Config,
     bus: &EventBus,
-    store: &mut RedisStore,
+    store: &RedisStore,
+    llm: &LlmClient,
     event: &EventEnvelope,
 ) {
     let trace_id = event.trace_id.clone();
@@ -158,14 +169,37 @@ async fn handle_build_done(
     }
 
     let prompt = prompts::generate_qa_prompt(&story, &gate_results);
-    println!("\n{}", prompt);
+    println!("\nGenerating LLM response...");
+
+    let llm_response = match llm.generate(&prompt) {
+        Ok(response) => {
+            println!("LLM response received ({} chars)", response.len());
+            response
+        }
+        Err(e) => {
+            println!("LLM call failed: {}", e);
+            println!("Rolling back - re-emitting build.done.retry");
+            
+            let retry_event = EventEnvelope::new(
+                &Uuid::new_v4().to_string(),
+                &trace_id,
+                "build.done.retry",
+                "qa",
+                "qa",
+                json!({ "storyId": story.id }),
+                json!({ "summary": format!("Build {} needs retry: {}", story.id, e) }),
+            );
+            bus.publish_to_role("qa", retry_event).ok();
+            return;
+        }
+    };
 
     let runlog_id = Uuid::new_v4().to_string();
     let mut runlog = Doc::new(
         &runlog_id,
         DocType::Runlog,
         &format!("QA Agent - Story {}", story.id),
-        &prompt,
+        &format!("PROMPT:\n{}\n\nLLM RESPONSE:\n{}", prompt, llm_response),
         if all_passed { "passed" } else { "failed" },
         Role::Qa,
     );
@@ -174,7 +208,8 @@ async fn handle_build_done(
         "event_id": event_id,
         "action": "test.execution",
         "story_id": story.id,
-        "gate_results": gate_results
+        "gate_results": gate_results,
+        "llm_response": llm_response
     });
     store.doc_put(&runlog, None).ok();
 
@@ -267,7 +302,8 @@ async fn handle_build_done(
 async fn handle_bug_new(
     config: &Config,
     bus: &EventBus,
-    store: &mut RedisStore,
+    store: &RedisStore,
+    llm: &LlmClient,
     event: &EventEnvelope,
 ) {
     let trace_id = event.trace_id.clone();
@@ -291,14 +327,37 @@ async fn handle_bug_new(
     println!("Verifying bug fix: {} - {}", bug.id, bug.title);
 
     let prompt = prompts::generate_verification_prompt(&bug);
-    println!("\n{}", prompt);
+    println!("\nGenerating LLM response...");
+
+    let llm_response = match llm.generate(&prompt) {
+        Ok(response) => {
+            println!("LLM response received ({} chars)", response.len());
+            response
+        }
+        Err(e) => {
+            println!("LLM call failed: {}", e);
+            println!("Rolling back - emitting bug.retry");
+            
+            let retry_event = EventEnvelope::new(
+                &Uuid::new_v4().to_string(),
+                &trace_id,
+                "bug.retry",
+                "qa",
+                "qa",
+                json!({ "bugId": bug.id }),
+                json!({ "summary": format!("Bug {} needs retry: {}", bug.id, e) }),
+            );
+            bus.publish_to_role("qa", retry_event).ok();
+            return;
+        }
+    };
 
     let runlog_id = Uuid::new_v4().to_string();
     let mut runlog = Doc::new(
         &runlog_id,
         DocType::Runlog,
         &format!("QA Agent - Bug Verification {}", bug.id),
-        &prompt,
+        &format!("PROMPT:\n{}\n\nLLM RESPONSE:\n{}", prompt, llm_response),
         "in_progress",
         Role::Qa,
     );
@@ -306,7 +365,8 @@ async fn handle_bug_new(
     runlog.fields = json!({
         "event_id": event_id,
         "action": "bug.verification",
-        "bug_id": bug.id
+        "bug_id": bug.id,
+        "llm_response": llm_response
     });
     store.doc_put(&runlog, None).ok();
 
