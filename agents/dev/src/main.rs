@@ -154,7 +154,7 @@ async fn handle_story_ready(
     store.doc_put(&runlog, None).ok();
 
     let mut all_args = default_args.clone();
-    all_args.push("--prompt".to_string());
+    all_args.push("--run".to_string());
     all_args.push(prompt.clone());
 
     let job = ExecJob {
