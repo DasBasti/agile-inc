@@ -126,7 +126,12 @@ fn handle_story_creation(config: &Config, bus: &EventBus, store: &RedisStore, ll
             let prompt = prompts::generate_po_prompt(&saved_doc);
             println!("\nGenerating LLM response...");
 
-            let llm_response = match llm.generate(&prompt) {
+            let llm_config = config.llm.clone();
+            let prompt_clone = prompt.clone();
+            let llm_response = match std::thread::spawn(move || {
+                let llm = LlmClient::new(&llm_config.model, llm_config.temperature, llm_config.max_tokens, &llm_config.base_url)?;
+                llm.generate(&prompt_clone)
+            }).join().unwrap() {
                 Ok(response) => {
                     println!("LLM response received ({} chars)", response.len());
                     response

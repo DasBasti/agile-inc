@@ -171,7 +171,12 @@ async fn handle_build_done(
     let prompt = prompts::generate_qa_prompt(&story, &gate_results);
     println!("\nGenerating LLM response...");
 
-    let llm_response = match llm.generate(&prompt) {
+    let llm_config = config.llm.clone();
+    let prompt_clone = prompt.clone();
+    let llm_response = match std::thread::spawn(move || {
+        let llm = LlmClient::new(&llm_config.model, llm_config.temperature, llm_config.max_tokens, &llm_config.base_url)?;
+        llm.generate(&prompt_clone)
+    }).join().unwrap() {
         Ok(response) => {
             println!("LLM response received ({} chars)", response.len());
             response
@@ -329,7 +334,12 @@ async fn handle_bug_new(
     let prompt = prompts::generate_verification_prompt(&bug);
     println!("\nGenerating LLM response...");
 
-    let llm_response = match llm.generate(&prompt) {
+    let llm_config = config.llm.clone();
+    let prompt_clone = prompt.clone();
+    let llm_response = match std::thread::spawn(move || {
+        let llm = LlmClient::new(&llm_config.model, llm_config.temperature, llm_config.max_tokens, &llm_config.base_url)?;
+        llm.generate(&prompt_clone)
+    }).join().unwrap() {
         Ok(response) => {
             println!("LLM response received ({} chars)", response.len());
             response
