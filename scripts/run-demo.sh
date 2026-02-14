@@ -18,6 +18,8 @@ show_usage() {
     echo "  --criteria <c1,c2...>  Acceptance criteria (comma-separated)"
     echo "  --dod <g1,g2...>       Definition of done gates (comma-separated)"
     echo "  --auto                 Run in automated mode without waiting for input"
+    echo "  --po-run               Trigger po.run event for direct agent testing"
+    echo "  --prompt <text>        Prompt for po.run mode"
     echo "  --help                 Show this help"
     echo ""
     echo "If run without --auto, the script will start agents and wait for"
@@ -29,6 +31,8 @@ BODY=""
 CRITERIA=""
 DOD=""
 AUTO_MODE=false
+PO_RUN=false
+PROMPT=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -51,6 +55,14 @@ while [[ $# -gt 0 ]]; do
         --auto)
             AUTO_MODE=true
             shift
+            ;;
+        --po-run)
+            PO_RUN=true
+            shift
+            ;;
+        --prompt)
+            PROMPT="$2"
+            shift 2
             ;;
         --help)
             show_usage
@@ -128,7 +140,27 @@ echo ""
 echo "Audit tool: http://localhost:3000"
 echo ""
 
-if [ "$AUTO_MODE" = true ]; then
+if [ "$PO_RUN" = true ]; then
+    if [ -z "$PROMPT" ]; then
+        echo "Error: --prompt is required for po.run mode"
+        exit 1
+    fi
+    
+    echo "Running po.run mode..."
+    echo "Prompt: $PROMPT"
+    
+    cargo run -p tools_publish_event --bin publish_event --release -- \
+        --po-run \
+        --prompt "$PROMPT" \
+        --mqtt-host "$MQTT_HOST" \
+        --mqtt-port "$MQTT_PORT"
+    
+    echo ""
+    echo "po.run submitted! Check the audit tool for progress."
+    echo "Press Ctrl+C to stop all agents."
+    
+    wait
+elif [ "$AUTO_MODE" = true ]; then
     if [ -z "$TITLE" ]; then
         echo "Error: --title is required in auto mode"
         exit 1

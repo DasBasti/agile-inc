@@ -8,6 +8,8 @@ use uuid::Uuid;
 
 mod prompts;
 
+const MAX_LLM_ROUNDS: u32 = 10;
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("PO Agent starting...");
 
@@ -59,6 +61,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn handle_event(config: &Config, bus: &EventBus, store: &RedisStore, llm: &LlmClient, event: &EventEnvelope) {
     match event.r#type.as_str() {
+        "po.run" => {
+            handle_po_run(config, bus, store, llm, event);
+        }
         "story.new" | "story.create" => {
             handle_story_creation(config, bus, store, llm, event);
         }
@@ -71,7 +76,142 @@ fn handle_event(config: &Config, bus: &EventBus, store: &RedisStore, llm: &LlmCl
     }
 }
 
-fn handle_story_creation(config: &Config, bus: &EventBus, store: &RedisStore, llm: &LlmClient, event: &EventEnvelope) {
+fn handle_po_run(config: &Config, bus: &EventBus, store: &RedisStore, _llm: &LlmClient, event: &EventEnvelope) {
+    let trace_id = event.trace_id.clone();
+    let event_id = event.event_id.clone();
+
+    let payload = &event.payload;
+    let prompt = payload
+        .get("prompt")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let context = payload
+        .get("context")
+        .cloned();
+
+    if prompt.is_empty() {
+        println!("Error: po.run requires a 'prompt' field");
+        return;
+    }
+
+    let run_id = Uuid::new_v4().to_string();
+    println!("Starting PO run: {}", run_id);
+
+    let mut runlog = Doc::new(
+        &run_id,
+        DocType::Runlog,
+        &format!("PO Run {}", &run_id[..8]),
+        &prompt,
+        "in_progress",
+        Role::Po,
+    );
+    runlog.trace_id = Some(trace_id.clone());
+    runlog.fields = json!({
+        "event_id": event_id,
+        "prompt": prompt,
+        "context": context,
+        "llm_rounds": 0,
+    });
+
+    match store.doc_put(&runlog, None) {
+        Ok(_) => {}
+        Err(e) => {
+            println!("Failed to create runlog: {}", e);
+            return;
+        }
+    }
+
+    let result = run_llm_loop(config, store, &run_id, &prompt, context.as_ref());
+
+    let final_status = if result.is_ok() { "completed" } else { "failed" };
+    
+    if let Ok(updated) = store.doc_get(&run_id) {
+        let mut updated_doc = updated;
+        updated_doc.status = final_status.to_string();
+        updated_doc.fields["llm_response"] = json!(result.clone().unwrap_or_default());
+        updated_doc.fields["final_status"] = json!(final_status);
+        store.doc_put(&updated_doc, None).ok();
+    }
+
+    let response_event = EventEnvelope::new(
+        &Uuid::new_v4().to_string(),
+        &trace_id,
+        "po.completed",
+        "po",
+        &event.from,
+        json!({ "runId": run_id }),
+        json!({ 
+            "status": final_status,
+            "response": result.unwrap_or_default()
+        }),
+    );
+    bus.publish(&format!("agileinc/role/{}/inbox", event.from), response_event).ok();
+}
+
+fn run_llm_loop(config: &Config, store: &RedisStore, run_id: &str, initial_prompt: &str, _context: Option<&serde_json::Value>) -> Result<String, String> {
+    let llm_config = config.llm.clone();
+    
+    let mut current_prompt = initial_prompt.to_string();
+    let mut full_response = String::new();
+    let mut round = 0;
+
+    loop {
+        round += 1;
+        println!("LLM Round {}/{}", round, MAX_LLM_ROUNDS);
+
+        if round > MAX_LLM_ROUNDS {
+            println!("Max rounds ({}) reached, stopping", MAX_LLM_ROUNDS);
+            return Err(format!("Max rounds ({}) reached", MAX_LLM_ROUNDS));
+        }
+
+        let prompt_clone = current_prompt.clone();
+        let llm_cfg = llm_config.clone();
+        let llm_result = std::thread::spawn(move || {
+            let llm = LlmClient::new(&llm_cfg.model, llm_cfg.temperature, llm_cfg.max_tokens, &llm_cfg.base_url)?;
+            llm.generate(&prompt_clone)
+        }).join().unwrap();
+
+        let response = match llm_result {
+            Ok(r) => r,
+            Err(e) => {
+                println!("LLM error: {}", e);
+                return Err(e.to_string());
+            }
+        };
+
+        full_response.push_str(&format!("\n--- Round {} ---\n{}\n", round, response));
+
+        if let Ok(doc) = store.doc_get(run_id) {
+            let mut updated = doc;
+            updated.fields["llm_rounds"] = json!(round);
+            updated.fields["llm_response"] = json!(response);
+            store.doc_put(&updated, None).ok();
+        }
+
+        let should_continue = analyze_for_continuation(&response);
+        if !should_continue {
+            println!("LLM indicated completion");
+            return Ok(response);
+        }
+
+        current_prompt = format!(
+            "{}\n\n---\n\nPrevious response:\n{}\n\nDo you need to continue? If yes, provide the next step. If done, say DONE.",
+            initial_prompt, response
+        );
+    }
+}
+
+fn analyze_for_continuation(response: &str) -> bool {
+    let lower = response.to_lowercase();
+    if lower.contains("done") || lower.contains("completed") || lower.contains("finished") {
+        return false;
+    }
+    true
+}
+
+fn handle_story_creation(config: &Config, bus: &EventBus, store: &RedisStore, _llm: &LlmClient, event: &EventEnvelope) {
     let story_id = Uuid::new_v4().to_string();
     let trace_id = event.trace_id.clone();
     let event_id = event.event_id.clone();

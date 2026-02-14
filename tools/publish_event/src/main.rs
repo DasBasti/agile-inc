@@ -1,4 +1,4 @@
-use clap::{Parser, ValueEnum};
+use clap::Parser;
 use serde_json::json;
 
 #[derive(Parser, Debug)]
@@ -26,6 +26,12 @@ struct Args {
     #[arg(long)]
     demo: bool,
 
+    #[arg(long)]
+    po_run: bool,
+
+    #[arg(long)]
+    prompt: Option<String>,
+
     #[arg(long, default_value = "localhost")]
     mqtt_host: String,
 
@@ -35,6 +41,37 @@ struct Args {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
+
+    if args.po_run {
+        let prompt = args.prompt.unwrap_or_else(|| "Hello, please say hello back".to_string());
+        
+        let event = agile_common::types::EventEnvelope::new(
+            &uuid::Uuid::new_v4().to_string(),
+            &uuid::Uuid::new_v4().to_string(),
+            "po.run",
+            "cli",
+            "po",
+            json!({}),
+            json!({ "prompt": prompt }),
+        );
+
+        println!("Publishing po.run event to {}...", args.topic);
+        println!("Prompt: {}", prompt);
+
+        let bus = agile_bus_mqtt::EventBus::new(
+            &args.mqtt_host,
+            args.mqtt_port,
+            "publish-cli",
+            "",
+            "",
+            "agileinc",
+        )?;
+
+        bus.publish(&args.topic, event)?;
+        println!("Event published successfully!");
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        return Ok(());
+    }
 
     let (title, body, acceptance_criteria, definition_of_done) = if args.demo {
         (
