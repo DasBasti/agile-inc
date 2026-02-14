@@ -72,12 +72,37 @@ cleanup() {
 }
 trap cleanup EXIT
 
+wait_for_audit_tool() {
+    echo "Waiting for audit tool to be ready..."
+    local max_attempts=30
+    local attempt=1
+    while [ $attempt -le $max_attempts ]; do
+        if curl -s http://localhost:3000 > /dev/null 2>&1; then
+            echo "Audit tool is ready!"
+            return 0
+        fi
+        echo "  Attempt $attempt/$max_attempts..."
+        sleep 1
+        attempt=$((attempt + 1))
+    done
+    echo "Warning: Audit tool did not respond in time"
+    return 1
+}
+
 echo "Starting Agile Inc. agents..."
 echo "MQTT: $MQTT_HOST:$MQTT_PORT"
 echo ""
 
 cd "$PROJECT_DIR"
 
+echo "Starting audit tool..."
+cargo run -p tools-audit-tool --release > /tmp/audit-tool.log 2>&1 &
+AUDIT_PID=$!
+sleep 3
+
+wait_for_audit_tool
+
+echo ""
 echo "Starting PO agent..."
 cargo run -p agents-po --bin po --release > /tmp/agent-po.log 2>&1 &
 PO_PID=$!
@@ -92,11 +117,6 @@ echo "Starting QA agent..."
 cargo run -p agents-qa --bin qa --release > /tmp/agent-qa.log 2>&1 &
 QA_PID=$!
 sleep 2
-
-echo "Starting audit tool..."
-cargo run -p tools-audit-tool --release > /tmp/audit-tool.log 2>&1 &
-AUDIT_PID=$!
-sleep 3
 
 echo ""
 echo "Agents started:"
