@@ -106,12 +106,24 @@ fn default_llm_base_url() -> String {
 pub struct PromptsConfig {
     #[serde(default = "default_po_system_prompt_file")]
     pub po_system_prompt_file: String,
+    #[serde(default = "default_po_refinement_prompt_file")]
+    pub po_refinement_prompt_file: String,
+    #[serde(default = "default_po_refinement_criteria_file")]
+    pub po_refinement_criteria_file: String,
     #[serde(default = "default_max_llm_rounds")]
     pub max_llm_rounds: u32,
 }
 
 fn default_po_system_prompt_file() -> String {
     "config/prompts/po-system-prompt.txt".to_string()
+}
+
+fn default_po_refinement_prompt_file() -> String {
+    "agents/prompts/po/po-refinement-prompt.txt".to_string()
+}
+
+fn default_po_refinement_criteria_file() -> String {
+    "agents/prompts/po/po-refinement-criteria.md".to_string()
 }
 
 fn default_max_llm_rounds() -> u32 {

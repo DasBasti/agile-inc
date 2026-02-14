@@ -30,6 +30,12 @@ struct Args {
     po_run: bool,
 
     #[arg(long)]
+    po_refine: bool,
+
+    #[arg(long)]
+    story_id: Option<String>,
+
+    #[arg(long)]
     prompt: Option<String>,
 
     #[arg(long, default_value = "localhost")]
@@ -57,6 +63,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         println!("Publishing po.run event to {}...", args.topic);
         println!("Prompt: {}", prompt);
+
+        let bus = agile_bus_mqtt::EventBus::new(
+            &args.mqtt_host,
+            args.mqtt_port,
+            "publish-cli",
+            "",
+            "",
+            "agileinc",
+        )?;
+
+        bus.publish(&args.topic, event)?;
+        println!("Event published successfully!");
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        return Ok(());
+    }
+
+    if args.po_refine {
+        let story_id = args.story_id.unwrap_or_else(|| {
+            eprintln!("Error: --story-id is required for po_refine mode");
+            std::process::exit(1);
+        });
+        
+        let event = agile_common::types::EventEnvelope::new(
+            &uuid::Uuid::new_v4().to_string(),
+            &uuid::Uuid::new_v4().to_string(),
+            "po.refine",
+            "cli",
+            "po",
+            json!({}),
+            json!({ "storyId": story_id }),
+        );
+
+        println!("Publishing po.refine event to {}...", args.topic);
+        println!("Story ID: {}", story_id);
 
         let bus = agile_bus_mqtt::EventBus::new(
             &args.mqtt_host,

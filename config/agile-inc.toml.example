@@ -28,4 +28,6 @@ base_url = "http://localhost:11434"
 
 [prompts]
 po_system_prompt_file = "config/prompts/po-system-prompt.txt"
+po_refinement_prompt_file = "agents/prompts/po/po-refinement-prompt.txt"
+po_refinement_criteria_file = "agents/prompts/po/po-refinement-criteria.md"
 max_llm_rounds = 10

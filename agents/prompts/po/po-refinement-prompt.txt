@@ -1,0 +1,51 @@
+# Story Refinement Prompt
+
+You are refining a story for an agile software development team. Your goal is to improve the story to meet the Definition of Ready.
+
+## Original Story
+
+**Title:** {title}
+
+**Description:**
+{description}
+
+**Current Acceptance Criteria:**
+{acceptance_criteria}
+
+**Current Definition of Done:**
+{definition_of_done}
+
+## Refinement Guidelines
+
+Review the story against these criteria:
+1. Are acceptance criteria clear and testable?
+2. Are there any ambiguities or gaps?
+3. Is the scope appropriate for a single sprint?
+4. Are DoD gates defined and machine-checkable?
+
+## Instructions
+
+1. Analyze the original story thoroughly
+2. Identify any issues or improvements needed
+3. Provide refined/enhanced versions of:
+   - Acceptance Criteria (improve clarity, add missing scenarios)
+   - Definition of Done (add specific, executable gates)
+4. State whether the story is now READY or what is still missing
+
+## Output Format
+
+Provide your response in this structure:
+
+### Analysis
+[Your assessment of the original story]
+
+### Refined Acceptance Criteria
+[List of improved acceptance criteria]
+
+### Refined Definition of Done
+[List of machine-checkable gates]
+
+### Readiness Status
+READY / NOT_READY
+
+If NOT_READY, list what is still missing.
