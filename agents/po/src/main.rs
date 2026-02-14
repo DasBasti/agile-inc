@@ -341,7 +341,9 @@ fn handle_story_refinement(config: &Config, bus: &EventBus, store: &RedisStore, 
 
     if let Ok(response) = &result {
         if let Ok(mut story) = store.doc_get(&story_id) {
-            let is_ready = response.to_lowercase().contains("ready");
+            let resp_lower = response.to_lowercase();
+            let is_ready = resp_lower.contains("readiness status") && 
+                           (resp_lower.contains("\nready") || resp_lower.contains("\n ready") || resp_lower.ends_with("ready"));
             if is_ready {
                 story.status = "ready".to_string();
             } else {
