@@ -1,5 +1,4 @@
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use axum::{
     extract::{Query, State, Path},
@@ -14,12 +13,13 @@ mod mqtt_client;
 mod redis_client;
 
 use mqtt_client::MqttSubscriber;
-use redis_client::RedisClient;
+use redis_client::{RedisClient, RedisSubscriber};
 
 #[derive(Clone)]
 struct AppState {
     redis: Arc<Mutex<RedisClient>>,
     mqtt: Arc<MqttSubscriber>,
+    redis_sub: Arc<RedisSubscriber>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -166,6 +166,28 @@ async fn stream_handler(
     Html(html)
 }
 
+async fn sse_handler(
+    State(state): State<AppState>,
+) -> impl axum::response::IntoResponse {
+    let mut rx = state.redis_sub.subscribe();
+    
+    let stream = async_stream::stream! {
+        loop {
+            match rx.recv().await {
+                Ok(msg) => {
+                    let event = axum::response::sse::Event::default()
+                        .data(msg);
+                    yield Ok::<_, std::convert::Infallible>(event);
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    };
+    
+    axum::response::sse::Sse::new(stream)
+}
+
 async fn status_handler(
     State(state): State<AppState>,
 ) -> Html<String> {
@@ -247,7 +269,7 @@ async fn index() -> Html<String> {
         "<input type=\"text\" name=\"doc_type\" placeholder=\"Filter by type\" hx-get=\"/api/docs\" hx-trigger=\"change\" hx-target=\"#docs-table\" hx-debounce=\"300ms\">",
         "<input type=\"text\" name=\"status\" placeholder=\"Filter by status\" hx-get=\"/api/docs\" hx-trigger=\"change\" hx-target=\"#docs-table\" hx-debounce=\"300ms\">",
         "</div>",
-        "<div id=\"docs-table\" class=\"doc-list\" hx-get=\"/api/docs\" hx-trigger=\"load\"><p>Loading documents...</p></div>",
+        "<div id=\"docs-table\" class=\"doc-list\" hx-get=\"/api/docs\" hx-trigger=\"load, redis-msg\"><p>Loading documents...</p></div>",
         "</div>",
         "<div class=\"right-panel\">",
         "<h2>Document Detail</h2>",
@@ -261,6 +283,14 @@ async fn index() -> Html<String> {
         "</div>",
         "</main>",
         "<script>",
+        "const evtSource = new EventSource('/api/events');",
+        "evtSource.onmessage = function(e) {",
+        "  console.log('Redis event:', e.data);",
+        "  htmx.trigger('#docs-table', 'redis-msg');",
+        "};",
+        "evtSource.onerror = function() {",
+        "  console.log('SSE connection lost, reconnecting...');",
+        "};",
         "function clearMessages(){document.getElementById('mqtt-stream').innerHTML='<p>Messages cleared</p>';}",
         "let lastMsgCount = 0;",
         "document.body.addEventListener('htmx:afterSwap', function(e) {",
@@ -300,9 +330,13 @@ async fn main() {
     )
     .expect("Failed to connect to MQTT");
 
+    let redis_sub = Arc::new(RedisSubscriber::new(&config.redis.url));
+    redis_sub.start();
+
     let state = AppState {
         redis: Arc::new(Mutex::new(redis)),
         mqtt: Arc::new(mqtt),
+        redis_sub: redis_sub.clone(),
     };
 
     let app = Router::new()
@@ -311,6 +345,7 @@ async fn main() {
         .route("/api/docs/:id", get(doc_detail_handler))
         .route("/api/stream", get(stream_handler))
         .route("/api/status", get(status_handler))
+        .route("/api/events", get(sse_handler))
         .with_state(state);
 
     let port = 3000;
