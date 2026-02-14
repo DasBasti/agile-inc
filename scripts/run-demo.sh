@@ -20,6 +20,7 @@ show_usage() {
     echo "  --auto                 Run in automated mode without waiting for input"
     echo "  --po-run               Trigger po.run event for direct agent testing"
     echo "  --prompt <text>        Prompt for po.run mode"
+    echo "  --no-flush             Don't flush Redis/MQTT before starting"
     echo "  --help                 Show this help"
     echo ""
     echo "If run without --auto, the script will start agents and wait for"
@@ -33,6 +34,7 @@ DOD=""
 AUTO_MODE=false
 PO_RUN=false
 PROMPT=""
+FLUSH=true
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -51,6 +53,10 @@ while [[ $# -gt 0 ]]; do
         --dod)
             DOD="$2"
             shift 2
+            ;;
+        --no-flush)
+            FLUSH=false
+            shift
             ;;
         --auto)
             AUTO_MODE=true
@@ -101,11 +107,22 @@ wait_for_audit_tool() {
     return 1
 }
 
+flush_data() {
+    echo "Flushing Redis and MQTT..."
+    docker exec infra-redis-1 redis-cli FLUSHALL > /dev/null 2>&1 || true
+    docker exec infra-mqtt-1 mosquitto_pub -t "agileinc/flush" -m "flush" > /dev/null 2>&1 || true
+    echo "Data flushed."
+}
+
 echo "Starting Agile Inc. agents..."
 echo "MQTT: $MQTT_HOST:$MQTT_PORT"
 echo ""
 
 cd "$PROJECT_DIR"
+
+if [ "$FLUSH" = true ]; then
+    flush_data
+fi
 
 echo "Starting audit tool..."
 cargo run -p tools-audit-tool --release > /tmp/audit-tool.log 2>&1 &
