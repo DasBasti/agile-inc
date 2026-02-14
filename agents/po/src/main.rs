@@ -342,13 +342,22 @@ fn handle_story_refinement(config: &Config, bus: &EventBus, store: &RedisStore, 
     if let Ok(response) = &result {
         if let Ok(mut story) = store.doc_get(&story_id) {
             let resp_lower = response.to_lowercase();
-            let is_ready = resp_lower.contains("readiness status") && 
-                           (resp_lower.contains("\nready") || resp_lower.contains("\n ready") || resp_lower.ends_with("ready"));
-            if is_ready {
+            
+            let is_not_ready = resp_lower.contains("not_ready") 
+                || resp_lower.contains("not ready")
+                || resp_lower.contains("return to backlog")
+                || resp_lower.contains("do not publish")
+                || (resp_lower.contains("readiness status") && resp_lower.contains("not_ready"));
+            
+            if is_not_ready {
+                story.status = "refining".to_string();
+            } else if resp_lower.contains("readiness status") && 
+                      (resp_lower.contains("\nready") || resp_lower.contains("\n ready") || resp_lower.ends_with("ready")) {
                 story.status = "ready".to_string();
             } else {
                 story.status = "refining".to_string();
             }
+            
             story.fields["refinement_response"] = json!(response);
             store.doc_put(&story, None).ok();
         }
@@ -406,7 +415,7 @@ fn handle_story_creation(config: &Config, bus: &EventBus, store: &RedisStore, _l
             vec!["cargo test".to_string(), "cargo fmt --check".to_string()]
         });
 
-    let mut doc = Doc::new(&story_id, DocType::Story, &title, &body, "ready", Role::Po);
+    let mut doc = Doc::new(&story_id, DocType::Story, &title, &body, "draft", Role::Po);
     doc.trace_id = Some(trace_id.clone());
     doc.fields = json!({
         "acceptance_criteria": acceptance_criteria,
@@ -418,7 +427,7 @@ fn handle_story_creation(config: &Config, bus: &EventBus, store: &RedisStore, _l
     }
 
     match store.doc_put(&doc, Some(&event_id)) {
-        Ok(saved_doc) => {
+        Ok(mut saved_doc) => {
             println!("Created story: {} - {}", saved_doc.id, saved_doc.title);
 
             let prompt = prompts::generate_po_prompt(&saved_doc);
@@ -480,22 +489,37 @@ fn handle_story_creation(config: &Config, bus: &EventBus, store: &RedisStore, _l
             });
             store.doc_put(&runlog, None).ok();
 
-            let ready_event = EventEnvelope::new(
-                &Uuid::new_v4().to_string(),
-                &trace_id,
-                "story.ready",
-                "po",
-                "dev",
-                json!({
-                    "storyId": saved_doc.id,
-                    "title": saved_doc.title,
-                }),
-                json!({
-                    "summary": format!("Story '{}' is ready for development", title)
-                }),
-            );
-            bus.publish_to_role("dev", ready_event).ok();
-            println!("Published story.ready event to Dev");
+            let llm_lower = llm_response.to_lowercase();
+            let story_is_ready = !llm_lower.contains("not_ready") 
+                && !llm_lower.contains("not ready")
+                && !llm_lower.contains("return to backlog")
+                && !llm_lower.contains("do not publish");
+
+            if story_is_ready {
+                saved_doc.status = "ready".to_string();
+                store.doc_put(&saved_doc, None).ok();
+                
+                let ready_event = EventEnvelope::new(
+                    &Uuid::new_v4().to_string(),
+                    &trace_id,
+                    "story.ready",
+                    "po",
+                    "dev",
+                    json!({
+                        "storyId": saved_doc.id,
+                        "title": saved_doc.title,
+                    }),
+                    json!({
+                        "summary": format!("Story '{}' is ready for development", title)
+                    }),
+                );
+                bus.publish_to_role("dev", ready_event).ok();
+                println!("Published story.ready event to Dev");
+            } else {
+                saved_doc.status = "refining".to_string();
+                store.doc_put(&saved_doc, None).ok();
+                println!("Story requires refinement, not publishing story.ready");
+            }
         }
         Err(e) => {
             println!("Failed to create story: {}", e);
