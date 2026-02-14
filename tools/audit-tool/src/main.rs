@@ -146,15 +146,12 @@ async fn stream_handler(
     
     let mut html = format!("<div data-msg-count=\"{}\">", count);
     for msg in messages.iter().rev() {
-        let payload_short = if msg.payload.len() > 100 {
-            format!("{}...", &msg.payload[..100])
-        } else {
-            msg.payload.clone()
-        };
         html.push_str(&format!(
-            "<div class=\"mqtt-msg\"><span class=\"topic\">{}</span> <span class=\"payload\">{}</span></div>",
+            "<div class=\"mqtt-msg\"><span class=\"topic\">{}</span> <span class=\"meta\">{} → {} [{}]</span></div>",
             msg.topic,
-            html_escape(&payload_short)
+            msg.from,
+            msg.to,
+            msg.event_type
         ));
     }
     

@@ -19,6 +19,9 @@ pub struct MqttMessage {
     pub topic: String,
     pub payload: String,
     pub ts: String,
+    pub from: String,
+    pub to: String,
+    pub event_type: String,
 }
 
 pub struct MqttSubscriber {
@@ -76,7 +79,9 @@ impl MqttSubscriber {
                             let payload = String::from_utf8_lossy(&publish.payload).to_string();
                             let ts = chrono::Utc::now().to_rfc3339();
                             
-                            let msg = MqttMessage { topic, payload, ts };
+                            let (from, to, event_type) = parse_mqtt_payload(&payload);
+                            
+                            let msg = MqttMessage { topic, payload, ts, from, to, event_type };
                             messages_clone.lock().unwrap().push_back(msg);
                             
                             if messages_clone.lock().unwrap().len() > 1000 {
@@ -113,5 +118,16 @@ impl MqttSubscriber {
 
     pub fn clear_messages(&self) {
         self.messages.lock().unwrap().clear();
+    }
+}
+
+fn parse_mqtt_payload(payload: &str) -> (String, String, String) {
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(payload) {
+        let from = json.get("from").and_then(|v| v.as_str()).unwrap_or("-").to_string();
+        let to = json.get("to").and_then(|v| v.as_str()).unwrap_or("-").to_string();
+        let event_type = json.get("type").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+        (from, to, event_type)
+    } else {
+        ("-".to_string(), "-".to_string(), "unknown".to_string())
     }
 }
