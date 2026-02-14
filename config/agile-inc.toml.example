@@ -27,5 +27,5 @@ max_tokens = 2048
 base_url = "http://localhost:11434"
 
 [prompts]
-po_system_prompt = "You are a Product Owner agent. Review the story and provide feedback."
+po_system_prompt_file = "config/prompts/po-system-prompt.txt"
 max_llm_rounds = 10

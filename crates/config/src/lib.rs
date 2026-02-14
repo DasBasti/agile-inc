@@ -104,14 +104,14 @@ fn default_llm_base_url() -> String {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct PromptsConfig {
-    #[serde(default = "default_po_system_prompt")]
-    pub po_system_prompt: String,
+    #[serde(default = "default_po_system_prompt_file")]
+    pub po_system_prompt_file: String,
     #[serde(default = "default_max_llm_rounds")]
     pub max_llm_rounds: u32,
 }
 
-fn default_po_system_prompt() -> String {
-    "You are a Product Owner agent. Analyze the story and respond with your thoughts.".to_string()
+fn default_po_system_prompt_file() -> String {
+    "config/prompts/po-system-prompt.txt".to_string()
 }
 
 fn default_max_llm_rounds() -> u32 {

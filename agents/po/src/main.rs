@@ -17,6 +17,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.mqtt.host, config.mqtt.port, config.redis.url, config.llm.model, config.prompts.max_llm_rounds
     );
 
+    let system_prompt = std::fs::read_to_string(&config.prompts.po_system_prompt_file)
+        .unwrap_or_else(|e| {
+            eprintln!("Warning: Could not read prompt file {}: {}", config.prompts.po_system_prompt_file, e);
+            "You are a helpful assistant.".to_string()
+        });
+    println!("Loaded system prompt from: {}", config.prompts.po_system_prompt_file);
+
     let store = RedisStore::new(&config.redis.url)?;
     store.ping()?;
     println!("Redis connected");
@@ -51,16 +58,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "\nReceived event: {} (trace: {})",
                 event.r#type, event.trace_id
             );
-            handle_event(&config, &bus, &store, &llm, &event);
+            handle_event(&config, &bus, &store, &llm, &event, &system_prompt);
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
 }
 
-fn handle_event(config: &Config, bus: &EventBus, store: &RedisStore, llm: &LlmClient, event: &EventEnvelope) {
+fn handle_event(config: &Config, bus: &EventBus, store: &RedisStore, llm: &LlmClient, event: &EventEnvelope, system_prompt: &str) {
     match event.r#type.as_str() {
         "po.run" => {
-            handle_po_run(config, bus, store, llm, event);
+            handle_po_run(config, bus, store, llm, event, system_prompt);
         }
         "story.new" | "story.create" => {
             handle_story_creation(config, bus, store, llm, event);
@@ -74,7 +81,7 @@ fn handle_event(config: &Config, bus: &EventBus, store: &RedisStore, llm: &LlmCl
     }
 }
 
-fn handle_po_run(config: &Config, bus: &EventBus, store: &RedisStore, _llm: &LlmClient, event: &EventEnvelope) {
+fn handle_po_run(config: &Config, bus: &EventBus, store: &RedisStore, _llm: &LlmClient, event: &EventEnvelope, system_prompt: &str) {
     let trace_id = event.trace_id.clone();
     let event_id = event.event_id.clone();
 
@@ -121,7 +128,7 @@ fn handle_po_run(config: &Config, bus: &EventBus, store: &RedisStore, _llm: &Llm
         }
     }
 
-    let result = run_llm_loop(config, store, &run_id, &prompt, context.as_ref());
+    let result = run_llm_loop(config, store, &run_id, &prompt, system_prompt, context.as_ref());
 
     let final_status = if result.is_ok() { "completed" } else { "failed" };
     
@@ -148,10 +155,9 @@ fn handle_po_run(config: &Config, bus: &EventBus, store: &RedisStore, _llm: &Llm
     bus.publish(&format!("agileinc/role/{}/inbox", event.from), response_event).ok();
 }
 
-fn run_llm_loop(config: &Config, store: &RedisStore, run_id: &str, initial_prompt: &str, _context: Option<&serde_json::Value>) -> Result<String, String> {
+fn run_llm_loop(config: &Config, store: &RedisStore, run_id: &str, initial_prompt: &str, system_prompt: &str, _context: Option<&serde_json::Value>) -> Result<String, String> {
     let llm_config = config.llm.clone();
     let max_rounds = config.prompts.max_llm_rounds;
-    let system_prompt = &config.prompts.po_system_prompt;
     
     let mut current_prompt = format!("{}\n\n---\n\n{}", system_prompt, initial_prompt);
     let mut full_response = String::new();
