@@ -116,6 +116,7 @@ fn handle_po_run(config: &Config, bus: &EventBus, store: &RedisStore, _llm: &Llm
     runlog.fields = json!({
         "event_id": event_id,
         "prompt": prompt,
+        "system_prompt": system_prompt,
         "context": context,
         "llm_rounds": 0,
     });
