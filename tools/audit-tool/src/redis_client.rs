@@ -35,6 +35,13 @@ impl RedisClient {
         Ok(Self { conn })
     }
 
+    pub fn is_connected(&mut self) -> bool {
+        redis::cmd("PING")
+            .query::<String>(&mut self.conn)
+            .map(|r| r == "PONG")
+            .unwrap_or(false)
+    }
+
     pub fn list_docs(&mut self, doc_type: Option<&str>, status: Option<&str>) -> AuditResult<Vec<DocSummary>> {
         let mut docs = Vec::new();
 
@@ -77,11 +84,13 @@ impl RedisClient {
                 .unwrap_or_default();
 
             for key in keys {
-                if key.contains(':') {
+                if key.contains(":version") {
                     continue;
                 }
-                if let Ok(summary) = self.get_doc_summary(&key) {
-                    docs.push(summary);
+                if let Some(id) = key.strip_prefix("doc:") {
+                    if let Ok(summary) = self.get_doc_summary(id) {
+                        docs.push(summary);
+                    }
                 }
             }
         }

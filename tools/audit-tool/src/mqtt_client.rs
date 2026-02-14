@@ -23,6 +23,7 @@ pub struct MqttMessage {
 
 pub struct MqttSubscriber {
     messages: Arc<std::sync::Mutex<VecDeque<MqttMessage>>>,
+    connected: Arc<std::sync::Mutex<bool>>,
 }
 
 impl MqttSubscriber {
@@ -35,7 +36,9 @@ impl MqttSubscriber {
         base_topic: &str,
     ) -> MqttResult<Self> {
         let messages = Arc::new(std::sync::Mutex::new(VecDeque::new()));
+        let connected = Arc::new(std::sync::Mutex::new(false));
         let messages_clone = messages.clone();
+        let connected_clone = connected.clone();
 
         let client_id_clone = client_id.to_string();
         let host_clone = host.to_string();
@@ -64,6 +67,8 @@ impl MqttSubscriber {
                     eprintln!("Failed to subscribe to {}: {}", topic, e);
                 }
 
+                *connected_clone.lock().unwrap() = true;
+
                 loop {
                     match eventloop.poll().await {
                         Ok(Event::Incoming(Packet::Publish(publish))) => {
@@ -88,16 +93,22 @@ impl MqttSubscriber {
             });
         });
 
-        Ok(Self { messages })
+        Ok(Self { messages, connected })
     }
 
-    pub fn get_messages(&self, count: usize) -> Vec<MqttMessage> {
+    pub fn is_connected(&self) -> bool {
+        *self.connected.lock().unwrap()
+    }
+
+    pub fn get_messages(&self, count: usize) -> (Vec<MqttMessage>, usize) {
         let msgs = self.messages.lock().unwrap();
-        msgs.iter()
+        let total = msgs.len();
+        let result: Vec<MqttMessage> = msgs.iter()
             .rev()
             .take(count)
             .cloned()
-            .collect()
+            .collect();
+        (result, total)
     }
 
     pub fn clear_messages(&self) {

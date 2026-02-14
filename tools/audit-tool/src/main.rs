@@ -33,8 +33,10 @@ async fn docs_handler(
     Query(query): Query<DocQuery>,
 ) -> Html<String> {
     let mut redis = state.redis.lock().unwrap();
+    let doc_type = query.doc_type.as_ref().filter(|s| !s.is_empty()).map(|s| s.as_str());
+    let status = query.status.as_ref().filter(|s| !s.is_empty()).map(|s| s.as_str());
     let docs = redis
-        .list_docs(query.doc_type.as_deref(), query.status.as_deref())
+        .list_docs(doc_type, status)
         .unwrap_or_default();
 
     let mut html = String::from("<table class=\"striped\"><thead><tr><th>ID</th><th>Type</th><th>Title</th><th>Status</th><th>Owner</th><th>Updated</th></tr></thead><tbody>");
@@ -86,9 +88,9 @@ async fn stream_handler(
     State(state): State<AppState>,
 ) -> Html<String> {
     let mqtt = state.mqtt.clone();
-    let messages = mqtt.get_messages(50);
+    let (messages, count) = mqtt.get_messages(50);
     
-    let mut html = String::new();
+    let mut html = format!("<div data-msg-count=\"{}\">", count);
     for msg in messages.iter().rev() {
         let payload_short = if msg.payload.len() > 100 {
             format!("{}...", &msg.payload[..100])
@@ -102,11 +104,36 @@ async fn stream_handler(
         ));
     }
     
-    if html.is_empty() {
-        html = "<p>Waiting for messages...</p>".to_string();
+    if messages.is_empty() {
+        html.push_str("<p>Waiting for messages...</p>");
     }
     
+    html.push_str("</div>");
     Html(html)
+}
+
+async fn status_handler(
+    State(state): State<AppState>,
+) -> Html<String> {
+    let redis_connected = {
+        let mut redis = state.redis.lock().unwrap();
+        redis.is_connected()
+    };
+    let mqtt_connected = state.mqtt.is_connected();
+    
+    let redis_class = if redis_connected { "status-success" } else { "status-error" };
+    let redis_text = if redis_connected { "Connected" } else { "Disconnected" };
+    
+    let mqtt_class = if mqtt_connected { "status-success" } else { "status-error" };
+    let mqtt_text = if mqtt_connected { "Connected" } else { "Disconnected" };
+    
+    Html(format!(
+        r#"<div class="grid" style="grid-template-columns: 1fr 1fr; gap: 8px;">
+            <div><span class="{}">●</span> Redis: {}</div>
+            <div><span class="{}">●</span> MQTT: {}</div>
+        </div>"#,
+        redis_class, redis_text, mqtt_class, mqtt_text
+    ))
 }
 
 fn html_escape(s: &str) -> String {
@@ -144,6 +171,7 @@ async fn index() -> Html<String> {
         "<body>",
         "<main class=\"container\">",
         "<h1>Agile Inc. Audit Tool</h1>",
+        "<div id=\"connection-status\" hx-get=\"/api/status\" hx-trigger=\"load, every 5s\" hx-swap=\"innerHTML\" style=\"margin-bottom: 16px;\"></div>",
         "<div class=\"grid\">",
         "<section>",
         "<h2>Documents</h2>",
@@ -159,11 +187,27 @@ async fn index() -> Html<String> {
         "<section>",
         "<h2>MQTT Stream</h2>",
         "<button onclick=\"clearMessages()\">Clear</button>",
-        "<div id=\"mqtt-stream\" hx-get=\"/api/stream\" hx-trigger=\"load, every 2s\" hx-swap=\"innerHTML\"><p>Waiting for messages...</p></div>",
+        "<div id=\"mqtt-stream\" hx-get=\"/api/stream\" hx-trigger=\"load, every 2s, mqtt-msg\" hx-swap=\"innerHTML\"><p>Waiting for messages...</p></div>",
+        "<div id=\"docs-trigger\" hx-get=\"/api/docs\" hx-trigger=\"mqtt-msg\" hx-target=\"#docs-table\" hx-swap=\"innerHTML\" style=\"display:none;\"></div>",
         "</section>",
         "</div>",
         "</main>",
         "<script>function clearMessages(){document.getElementById('mqtt-stream').innerHTML='<p>Messages cleared</p>';}</script>",
+        "<script>",
+        "let lastMsgCount = 0;",
+        "document.body.addEventListener('htmx:afterSwap', function(e) {",
+        "  if (e.detail.target.id === 'mqtt-stream') {",
+        "    const container = e.detail.target.closest('[data-msg-count]');",
+        "    if (container) {",
+        "      const count = parseInt(container.dataset.msgCount, 10);",
+        "      if (count > lastMsgCount && lastMsgCount > 0) {",
+        "        htmx.trigger('#docs-table', 'mqtt-msg');",
+        "      }",
+        "      lastMsgCount = count;",
+        "    }",
+        "  }",
+        "});",
+        "</script>",
         "</body>",
         "</html>"
     );
@@ -198,6 +242,7 @@ async fn main() {
         .route("/api/docs", get(docs_handler))
         .route("/api/docs/:id", get(doc_detail_handler))
         .route("/api/stream", get(stream_handler))
+        .route("/api/status", get(status_handler))
         .with_state(state);
 
     let port = 3000;
