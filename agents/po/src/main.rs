@@ -8,15 +8,13 @@ use uuid::Uuid;
 
 mod prompts;
 
-const MAX_LLM_ROUNDS: u32 = 10;
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("PO Agent starting...");
 
     let config = Config::load("config/agile-inc.toml")?;
     println!(
-        "Config loaded: MQTT={}:{}, Redis={}, LLM={}",
-        config.mqtt.host, config.mqtt.port, config.redis.url, config.llm.model
+        "Config loaded: MQTT={}:{}, Redis={}, LLM={}, MaxRounds={}",
+        config.mqtt.host, config.mqtt.port, config.redis.url, config.llm.model, config.prompts.max_llm_rounds
     );
 
     let store = RedisStore::new(&config.redis.url)?;
@@ -152,18 +150,20 @@ fn handle_po_run(config: &Config, bus: &EventBus, store: &RedisStore, _llm: &Llm
 
 fn run_llm_loop(config: &Config, store: &RedisStore, run_id: &str, initial_prompt: &str, _context: Option<&serde_json::Value>) -> Result<String, String> {
     let llm_config = config.llm.clone();
+    let max_rounds = config.prompts.max_llm_rounds;
+    let system_prompt = &config.prompts.po_system_prompt;
     
-    let mut current_prompt = initial_prompt.to_string();
+    let mut current_prompt = format!("{}\n\n---\n\n{}", system_prompt, initial_prompt);
     let mut full_response = String::new();
     let mut round = 0;
 
     loop {
         round += 1;
-        println!("LLM Round {}/{}", round, MAX_LLM_ROUNDS);
+        println!("LLM Round {}/{}", round, max_rounds);
 
-        if round > MAX_LLM_ROUNDS {
-            println!("Max rounds ({}) reached, stopping", MAX_LLM_ROUNDS);
-            return Err(format!("Max rounds ({}) reached", MAX_LLM_ROUNDS));
+        if round > max_rounds {
+            println!("Max rounds ({}) reached, stopping", max_rounds);
+            return Err(format!("Max rounds ({}) reached", max_rounds));
         }
 
         let prompt_clone = current_prompt.clone();

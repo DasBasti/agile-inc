@@ -103,6 +103,22 @@ fn default_llm_base_url() -> String {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct PromptsConfig {
+    #[serde(default = "default_po_system_prompt")]
+    pub po_system_prompt: String,
+    #[serde(default = "default_max_llm_rounds")]
+    pub max_llm_rounds: u32,
+}
+
+fn default_po_system_prompt() -> String {
+    "You are a Product Owner agent. Analyze the story and respond with your thoughts.".to_string()
+}
+
+fn default_max_llm_rounds() -> u32 {
+    10
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Config {
     pub mqtt: MqttConfig,
     pub redis: RedisConfig,
@@ -111,6 +127,8 @@ pub struct Config {
     pub agents: AgentsConfig,
     #[serde(default)]
     pub llm: LlmConfig,
+    #[serde(default)]
+    pub prompts: PromptsConfig,
 }
 
 impl Config {

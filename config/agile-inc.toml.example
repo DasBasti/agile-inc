@@ -19,3 +19,13 @@ max_output_kb = 2048
 
 [agents]
 log_level = "info"
+
+[llm]
+model = "minimax-m2.5:cloud"
+temperature = 0.7
+max_tokens = 2048
+base_url = "http://localhost:11434"
+
+[prompts]
+po_system_prompt = "You are a Product Owner agent. Review the story and provide feedback."
+max_llm_rounds = 10
